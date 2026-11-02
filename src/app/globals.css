@@ -1,0 +1,193 @@
+@import "tailwindcss";
+
+/* ------------------------------------------------------------------ *
+ * Tazdeed School — design system tokens
+ * ------------------------------------------------------------------ */
+@theme {
+  --color-navy-50: #eef3fa;
+  --color-navy-100: #d8e3f2;
+  --color-navy-200: #b0c6e4;
+  --color-navy-300: #7d9fd0;
+  --color-navy-400: #4a76b4;
+  --color-navy-500: #2a5590;
+  --color-navy-600: #173b68;
+  --color-navy-700: #123055;
+  --color-navy-800: #0e2544;
+  --color-navy-900: #0a1a31;
+
+  --color-royal-50: #eff6ff;
+  --color-royal-100: #dbeafe;
+  --color-royal-200: #bfdbfe;
+  --color-royal-300: #93c5fd;
+  --color-royal-400: #60a5fa;
+  --color-royal-500: #3b82f6;
+  --color-royal-600: #2563eb;
+  --color-royal-700: #1d4ed8;
+  --color-royal-800: #1e40af;
+
+  --color-emerald-brand: #10b981;
+  --color-amber-brand: #f59e0b;
+  --color-soft: #f8fafc;
+  --color-ink: #0f172a;
+  --color-muted: #64748b;
+
+  --font-sans: "Inter", "Noto Sans Bengali", "Hind Siliguri", ui-sans-serif,
+    system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-bengali: "Noto Sans Bengali", "Hind Siliguri", "Inter", ui-sans-serif,
+    system-ui, sans-serif;
+
+  --radius-card: 1rem;
+  --shadow-card: 0 1px 2px rgba(15, 23, 42, 0.04), 0 8px 24px rgba(15, 23, 42, 0.06);
+  --shadow-lift: 0 2px 4px rgba(15, 23, 42, 0.05), 0 18px 40px rgba(15, 23, 42, 0.12);
+}
+
+html {
+  scroll-behavior: smooth;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  background-color: var(--color-soft);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-feature-settings: "cv02", "cv03", "cv11";
+}
+
+/* Bengali runs get a Bengali-first font stack without extra markup. */
+[lang="bn"] body,
+body[lang="bn"],
+.bn {
+  font-family: var(--font-bengali);
+  line-height: 1.75;
+}
+
+/* Visible, consistent keyboard focus. */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--color-royal-600);
+  outline-offset: 2px;
+  border-radius: 0.375rem;
+}
+
+::selection {
+  background: var(--color-navy-600);
+  color: #fff;
+}
+
+/* Thin, unobtrusive scrollbars inside data panels. */
+.scroll-thin {
+  scrollbar-width: thin;
+  scrollbar-color: #cbd5e1 transparent;
+}
+.scroll-thin::-webkit-scrollbar {
+  height: 8px;
+  width: 8px;
+}
+.scroll-thin::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 999px;
+}
+
+/* Subtle entrance used by hero/cards — disabled for reduced motion. */
+@keyframes tz-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.animate-rise {
+  animation: tz-rise 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes tz-pulse-soft {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+.animate-skeleton {
+  animation: tz-pulse-soft 1.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * Print templates (ID cards, marksheets, receipts, registers)
+ * The browser's "Print -> Save as PDF" is the only PDF pipeline used.
+ * ------------------------------------------------------------------ */
+@page {
+  size: A4;
+  margin: 14mm;
+}
+@page idcard {
+  size: 85.6mm 53.98mm;
+  margin: 0;
+}
+
+.print-area {
+  display: none;
+}
+
+@media print {
+  body {
+    background: #fff !important;
+  }
+  .no-print,
+  .no-print * {
+    display: none !important;
+  }
+  .print-area {
+    display: block !important;
+  }
+  .print-hide-overflow {
+    overflow: visible !important;
+  }
+  .print-page-break {
+    break-after: page;
+    page-break-after: always;
+  }
+  .print-avoid-break {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  .print-id-card {
+    page: idcard;
+  }
+  table.print-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11pt;
+  }
+  table.print-table th,
+  table.print-table td {
+    border: 1px solid #94a3b8;
+    padding: 4px 6px;
+    text-align: left;
+  }
+  /* Keep Bengali glyph shaping intact in print output. */
+  .bn {
+    font-family: var(--font-bengali) !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  * {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+}

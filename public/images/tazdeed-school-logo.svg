@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Tazdeed School">
+  <defs>
+    <linearGradient id="tzShield" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2a5590"/>
+      <stop offset="1" stop-color="#173B68"/>
+    </linearGradient>
+    <linearGradient id="tzBook" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#dbeafe"/>
+    </linearGradient>
+  </defs>
+  <path d="M256 24 452 92v168c0 108-78 186-196 228C138 446 60 368 60 260V92z" fill="url(#tzShield)"/>
+  <path d="M256 24 452 92v168c0 108-78 186-196 228C138 446 60 368 60 260V92z" fill="none" stroke="#10B981" stroke-width="14"/>
+  <circle cx="256" cy="176" r="46" fill="#F59E0B"/>
+  <path d="M256 118l116 58-116 58-116-58z" fill="url(#tzBook)" opacity="0.96"/>
+  <path d="M256 234v-96" stroke="#173B68" stroke-width="8" stroke-linecap="round"/>
+  <path d="M140 300c38-18 78-18 116 0 38-18 78-18 116 0v84c-38-18-78-18-116 0-38-18-78-18-116 0z" fill="#ffffff"/>
+  <path d="M256 300v84" stroke="#173B68" stroke-width="7"/>
+  <text x="256" y="446" text-anchor="middle" font-family="Inter,Segoe UI,sans-serif" font-size="52" font-weight="700" fill="#ffffff" letter-spacing="2">TAZDEED</text>
+</svg>

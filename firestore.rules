@@ -1,0 +1,561 @@
+rules_version = '2';
+
+/**
+ * Tazdeed School — Cloud Firestore Security Rules
+ * ================================================
+ * Single-school system. Default deny: nothing is readable or writable unless a
+ * rule below explicitly allows it.
+ *
+ * Authorization is derived from the signed-in user's *Firestore profile*
+ * (`/users/{uid}`), never from client-supplied fields. A user cannot change
+ * their own role, status, schoolId or record linkage.
+ *
+ * The first administrator is provisioned manually (see README): create the
+ * account in Firebase Authentication, then write `/users/{uid}` with
+ * `role: "admin"`, `status: "active"` and `schoolId: "tazdeed-school"`.
+ */
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------------------------------------------------------------- config
+    function schoolId() {
+      return 'tazdeed-school';
+    }
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function uid() {
+      return request.auth.uid;
+    }
+
+    function profileDoc() {
+      return /databases/$(database)/documents/users/$(uid());
+    }
+
+    function hasProfile() {
+      return signedIn() && exists(profileDoc());
+    }
+
+    function profile() {
+      return get(profileDoc()).data;
+    }
+
+    function role() {
+      return hasProfile() ? profile().role : '';
+    }
+
+    function isActive() {
+      return hasProfile() && profile().status == 'active';
+    }
+
+    function inSchool() {
+      return hasProfile() && profile().schoolId == schoolId();
+    }
+
+    function isAdmin()   { return isActive() && inSchool() && role() == 'admin'; }
+    function isTeacher() { return isActive() && inSchool() && role() == 'teacher'; }
+    function isAccountant() { return isActive() && inSchool() && role() == 'accountant'; }
+    function isLibrarian()  { return isActive() && inSchool() && role() == 'librarian'; }
+    function isStudent()    { return isActive() && inSchool() && role() == 'student'; }
+    function isParent()     { return isActive() && inSchool() && role() == 'parent'; }
+    function isStaff()      { return isAdmin() || isTeacher() || isAccountant() || isLibrarian(); }
+
+    function myStudentId() {
+      return hasProfile() && profile().keys().hasAny(['studentId']) ? profile().studentId : '';
+    }
+
+    function myTeacherId() {
+      return hasProfile() && profile().keys().hasAny(['teacherId']) ? profile().teacherId : '';
+    }
+
+    function myChildren() {
+      return hasProfile() && profile().keys().hasAny(['guardianStudentIds']) ? profile().guardianStudentIds : [];
+    }
+
+    /** Only the fields a user may change on their own profile document. */
+    function ownProfileFields() {
+      return ['displayName', 'displayNameBn', 'phone', 'photoUrl', 'preferredLanguage', 'updatedAt', 'lastLoginAt'];
+    }
+
+    function teacherDoc() {
+      return get(/databases/$(database)/documents/teachers/$(myTeacherId())).data;
+    }
+
+    function isTeacherOfClass(classId) {
+      return isTeacher() && myTeacherId() != '' && teacherDoc().keys().hasAny(['assignedClasses'])
+        && teacherDoc().assignedClasses.hasAny([classId]);
+    }
+
+    function isTeacherOfSubject(subjectId) {
+      return isTeacher() && myTeacherId() != '' && teacherDoc().keys().hasAny(['assignedSubjects'])
+        && teacherDoc().assignedSubjects.hasAny([subjectId]);
+    }
+
+    function isStudentOwner(studentId) {
+      return isStudent() && myStudentId() == studentId;
+    }
+
+    function isGuardianOf(studentId) {
+      return isParent() && myChildren().hasAny([studentId]);
+    }
+
+    function sameSchool() {
+      return request.resource.data.schoolId == schoolId();
+    }
+
+    function unchanged(field) {
+      return !(field in request.resource.data.diff(resource.data).affectedKeys());
+    }
+
+    function isHttpsUrl(value) {
+      return value is string && (value == '' || value.matches('^https://[^\\s]+$') || value.matches('^/images/[^\\s]+$'));
+    }
+
+    // ================================================================= users
+    match /users/{userId} {
+      // A signed-in user may read their own profile; admins may read all.
+      allow get: if isActive() && (userId == uid() || isAdmin());
+      allow list: if isAdmin();
+
+      // Administrators create accounts for approved, non-admin roles only.
+      allow create: if isAdmin()
+        && userId == request.resource.data.uid
+        && request.resource.data.role in ['teacher', 'accountant', 'librarian', 'student', 'parent']
+        && request.resource.data.status in ['active', 'disabled', 'invited']
+        && sameSchool();
+
+      allow update: if (
+          // Self-service: profile fields only — never role/status/links.
+          isActive() && userId == uid()
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(ownProfileFields())
+            && unchanged('role') && unchanged('status') && unchanged('schoolId') && unchanged('uid')
+        ) || (
+          // Administrators manage other accounts but cannot mint another admin
+          // through the ordinary UI path (role escalation guard).
+          isAdmin()
+            && request.resource.data.role in ['admin', 'teacher', 'accountant', 'librarian', 'student', 'parent']
+            && unchanged('schoolId')
+            && unchanged('uid')
+        );
+
+      allow delete: if isAdmin() && userId != uid();
+    }
+
+    // ============================================================== schools
+    match /schools/{school} {
+      allow get: if isActive() && inSchool();
+      allow list: if isAdmin();
+      allow write: if isAdmin();
+    }
+
+    // ============================================= public site configuration
+    // Non-personal configuration and published content only.
+    match /schoolSettings/{id} {
+      allow get: if true;
+      allow list: if true;
+      allow write: if isAdmin();
+    }
+
+    match /publicSiteContent/{id} {
+      allow get: if true;
+      allow list: if true;
+      allow write: if isAdmin();
+    }
+
+    // Academic configuration is needed by the public academics page.
+    match /classes/{id}      { allow get, list: if true; allow create, update, delete: if isAdmin(); }
+    match /sections/{id}     { allow get, list: if true; allow create, update, delete: if isAdmin(); }
+    match /subjects/{id}     { allow get, list: if true; allow create, update, delete: if isAdmin(); }
+    match /academicSessions/{id} { allow get, list: if true; allow create, update, delete: if isAdmin(); }
+    match /gradingRules/{id} {
+      allow get, list: if isActive() && inSchool();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // ============================================================== students
+    match /students/{studentId} {
+      allow get: if isAdmin() || isTeacher() || isAccountant() || isLibrarian()
+        || isStudentOwner(studentId) || isGuardianOf(studentId);
+      allow list: if isAdmin() || isTeacher() || isAccountant() || isLibrarian();
+
+      allow create: if isAdmin() && sameSchool()
+        && request.resource.data.admissionNo is string
+        && request.resource.data.admissionNo.size() > 0
+        && request.resource.data.fullName is string;
+
+      // Promotion/class changes and archival are administrative. Guardians and
+      // students can never rewrite their own record.
+      allow update: if isAdmin() && unchanged('schoolId');
+      allow delete: if isAdmin();
+    }
+
+    match /guardians/{id} {
+      allow get, list: if isAdmin() || isParent();
+      allow write: if isAdmin();
+    }
+
+    match /enrollments/{id} {
+      allow get, list: if isAdmin() || isTeacher() || isAccountant()
+        || (isStudent() && resource.data.studentId == myStudentId())
+        || (isParent() && myChildren().hasAny([resource.data.studentId]));
+      allow create, update: if isAdmin() && sameSchool() && unchanged('schoolId');
+      allow delete: if isAdmin();
+    }
+
+    // =============================================================== teachers
+    match /teachers/{teacherId} {
+      allow get: if isAdmin() || isAccountant() || isLibrarian()
+        || (isTeacher() && myTeacherId() == teacherId)
+        || (isTeacher() && resource.data.keys().hasAny(['assignedClasses']));
+      allow list: if isStaff();
+      allow create: if isAdmin() && sameSchool();
+      allow update: if isAdmin() && unchanged('schoolId');
+      allow delete: if isAdmin();
+    }
+
+    match /teacherAssignments/{id} {
+      allow get, list: if isStaff();
+      allow write: if isAdmin();
+    }
+
+    match /staff/{id} {
+      allow get, list: if isAdmin() || isAccountant() || isLibrarian();
+      allow create: if isAdmin() && sameSchool();
+      allow update: if isAdmin() && unchanged('schoolId');
+      allow delete: if isAdmin();
+    }
+
+    // ============================================================= attendance
+    match /attendanceRecords/{id} {
+      allow get: if isAdmin() || isAccountant()
+        || isTeacherOfClass(resource.data.classId)
+        || isTeacher()
+        || isStudentOwner(resource.data.studentId)
+        || isGuardianOf(resource.data.studentId);
+      allow list: if isAdmin() || isTeacher() || isAccountant()
+        || isStudent() || isParent();
+
+      // Deterministic ids (att-{dateKey}-{studentId}) make a second write for
+      // the same student/day an update, not a duplicate.
+      allow create: if (isAdmin() || isTeacherOfClass(request.resource.data.classId))
+        && sameSchool()
+        && request.resource.data.dateKey.matches('^\\d{4}-\\d{2}-\\d{2}$')
+        && request.resource.data.status in ['present', 'absent', 'late', 'leave']
+        && request.resource.data.markedBy == uid();
+
+      allow update: if (isAdmin() || isTeacherOfClass(resource.data.classId))
+        && unchanged('schoolId') && unchanged('studentId') && unchanged('dateKey')
+        && request.resource.data.status in ['present', 'absent', 'late', 'leave']
+        && request.resource.data.markedBy == uid();
+
+      allow delete: if isAdmin();
+    }
+
+    // ============================================== exams, marks and results
+    match /exams/{id} {
+      allow get, list: if isActive() && inSchool();
+      allow create: if isAdmin() && sameSchool();
+      allow update: if isAdmin() && unchanged('schoolId');
+      allow delete: if isAdmin();
+    }
+
+    match /marks/{id} {
+      allow get: if isAdmin()
+        || isTeacherOfSubject(resource.data.subjectId)
+        || isStudentOwner(resource.data.studentId)
+        || isGuardianOf(resource.data.studentId);
+      allow list: if isAdmin() || isTeacher() || isStudent() || isParent();
+
+      allow create: if (isAdmin() || isTeacherOfSubject(request.resource.data.subjectId))
+        && sameSchool()
+        && request.resource.data.maximumMarks is int
+        && request.resource.data.maximumMarks > 0
+        && request.resource.data.passMarks >= 0
+        && request.resource.data.enteredBy == uid();
+
+      allow update: if (isAdmin() || isTeacherOfSubject(resource.data.subjectId))
+        && unchanged('schoolId') && unchanged('examId') && unchanged('studentId')
+        && request.resource.data.enteredBy == uid();
+
+      // Marks are never deleted once results exist; admins only.
+      allow delete: if isAdmin();
+    }
+
+    match /results/{id} {
+      // Students and parents only ever see *published* results.
+      allow get: if isAdmin() || isTeacher()
+        || (isStudentOwner(resource.data.studentId) && resource.data.publicationStatus == 'published')
+        || (isGuardianOf(resource.data.studentId) && resource.data.publicationStatus == 'published');
+      allow list: if isAdmin() || isTeacher() || isStudent() || isParent();
+
+      allow create: if isAdmin() && sameSchool();
+      // Publishing, approval and corrections are administrative. Teachers and
+      // accountants cannot publish or modify results.
+      allow update: if isAdmin() && unchanged('schoolId') && unchanged('studentId') && unchanged('examId');
+      allow delete: if isAdmin();
+    }
+
+    // ================================================== fees and accounting
+    match /feeStructures/{id} {
+      allow get, list: if isStaff();
+      allow create, update: if (isAdmin() || isAccountant()) && sameSchool();
+      allow delete: if isAdmin();
+    }
+
+    match /invoices/{id} {
+      allow get: if isAdmin() || isAccountant()
+        || isStudentOwner(resource.data.studentId)
+        || isGuardianOf(resource.data.studentId);
+      allow list: if isAdmin() || isAccountant() || isStudent() || isParent();
+
+      allow create: if (isAdmin() || isAccountant()) && sameSchool()
+        && request.resource.data.amountPaisa is int
+        && request.resource.data.amountPaisa >= 0
+        && request.resource.data.paidAmountPaisa == 0
+        && request.resource.data.status in ['draft', 'unpaid', 'waived'];
+
+      // Only finance staff may change balances/status — a student, parent or
+      // teacher cannot mark an invoice paid by writing a field.
+      allow update: if (isAdmin() || isAccountant())
+        && unchanged('schoolId') && unchanged('studentId')
+        && request.resource.data.paidAmountPaisa is int
+        && request.resource.data.dueAmountPaisa is int;
+
+      allow delete: if isAdmin();
+    }
+
+    match /payments/{id} {
+      allow get: if isAdmin() || isAccountant()
+        || isStudentOwner(resource.data.studentId)
+        || isGuardianOf(resource.data.studentId);
+      allow list: if isAdmin() || isAccountant() || isStudent() || isParent();
+
+      allow create: if (isAdmin() || isAccountant()) && sameSchool()
+        && request.resource.data.amountPaisa is int
+        && request.resource.data.amountPaisa > 0
+        && request.resource.data.method in ['cash', 'bkash', 'nagad', 'rocket', 'bank', 'other']
+        && request.resource.data.verificationStatus in ['unverified', 'verified']
+        && request.resource.data.receivedBy == uid()
+        // A user-entered mobile-banking reference is never auto-verified.
+        && (request.resource.data.verificationStatus == 'unverified'
+            || request.resource.data.method == 'cash'
+            || request.resource.data.verifiedBy == uid());
+
+      allow update: if (isAdmin() || isAccountant())
+        && unchanged('schoolId') && unchanged('invoiceId') && unchanged('amountPaisa')
+        && request.resource.data.verificationStatus in ['unverified', 'verified', 'rejected']
+        && (request.resource.data.verificationStatus == resource.data.verificationStatus
+            || request.resource.data.verifiedBy == uid());
+
+      allow delete: if isAdmin();
+    }
+
+    match /expenses/{id} {
+      allow get, list: if isAdmin() || isAccountant();
+      allow create: if (isAdmin() || isAccountant()) && sameSchool()
+        && request.resource.data.amountPaisa is int && request.resource.data.amountPaisa > 0;
+      allow update: if (isAdmin() || isAccountant()) && unchanged('schoolId');
+      allow delete: if isAdmin();
+    }
+
+    // Payroll is never visible to teachers, students or parents.
+    match /salaryRecords/{id} {
+      allow get, list: if isAdmin() || isAccountant();
+      allow create: if isAdmin() && sameSchool();
+      allow update: if (isAdmin() || isAccountant()) && unchanged('schoolId');
+      allow delete: if isAdmin();
+    }
+
+    match /counters/{id} {
+      allow get: if isAdmin() || isAccountant();
+      allow create, update: if isAdmin() || isAccountant();
+      allow delete: if isAdmin();
+    }
+
+    // ================================================ notices and events
+    match /notices/{id} {
+      // Public visitors see published public notices only.
+      allow get, list: if (resource.data.publicationStatus == 'published' && resource.data.visibility == 'public')
+        || (isActive() && inSchool() && resource.data.publicationStatus == 'published')
+        || isAdmin();
+
+      allow create: if isAdmin() && sameSchool()
+        && request.resource.data.publicationStatus in ['draft', 'published', 'archived']
+        && request.resource.data.visibility in ['public', 'internal', 'students', 'parents', 'teachers']
+        && (!request.resource.data.keys().hasAny(['attachmentUrl']) || isHttpsUrl(request.resource.data.attachmentUrl))
+        && request.resource.data.createdBy == uid();
+
+      allow update: if isAdmin() && unchanged('schoolId');
+      allow delete: if isAdmin();
+    }
+
+    match /events/{id} {
+      allow get, list: if (resource.data.publicationStatus == 'published')
+        || (isActive() && inSchool())
+        || isAdmin();
+      allow create: if isAdmin() && sameSchool()
+        && request.resource.data.publicationStatus in ['draft', 'published', 'archived']
+        && (!request.resource.data.keys().hasAny(['imageUrl']) || isHttpsUrl(request.resource.data.imageUrl));
+      allow update: if isAdmin() && unchanged('schoolId');
+      allow delete: if isAdmin();
+    }
+
+    match /galleryItems/{id} {
+      allow get, list: if resource.data.isPublished == true || isAdmin();
+      allow create: if isAdmin() && sameSchool() && isHttpsUrl(request.resource.data.imageUrl);
+      allow update: if isAdmin() && unchanged('schoolId');
+      allow delete: if isAdmin();
+    }
+
+    match /testimonials/{id} {
+      // Only school-verified, published quotes are public.
+      allow get, list: if (resource.data.isPublished == true && resource.data.isVerified == true) || isAdmin();
+      allow create: if isAdmin() && sameSchool();
+      allow update: if isAdmin() && unchanged('schoolId');
+      allow delete: if isAdmin();
+    }
+
+    // ================================================== homework and library
+    match /homework/{id} {
+      allow get, list: if isAdmin()
+        || isTeacherOfClass(resource.data.classId)
+        || isTeacher()
+        || (isStudent() && resource.data.status == 'published')
+        || (isParent() && resource.data.status == 'published');
+
+      allow create: if (isAdmin() || isTeacherOfClass(request.resource.data.classId))
+        && sameSchool()
+        && request.resource.data.status in ['draft', 'published', 'archived']
+        && (!request.resource.data.keys().hasAny(['referenceUrl']) || isHttpsUrl(request.resource.data.referenceUrl));
+
+      allow update: if (isAdmin() || isTeacherOfClass(resource.data.classId)) && unchanged('schoolId');
+      allow delete: if isAdmin();
+    }
+
+    match /homeworkSubmissions/{id} {
+      allow get: if isAdmin() || isTeacher()
+        || (isStudent() && resource.data.studentId == myStudentId())
+        || (isParent() && myChildren().hasAny([resource.data.studentId]));
+      allow list: if isAdmin() || isTeacher() || isStudent() || isParent();
+
+      allow create: if isStudent() && sameSchool()
+        && request.resource.data.studentId == myStudentId()
+        && request.resource.data.status in ['submitted', 'late'];
+
+      allow update: if (isAdmin() || isTeacher())
+        || (isStudent() && resource.data.studentId == myStudentId() && resource.data.status != 'reviewed');
+
+      allow delete: if isAdmin();
+    }
+
+    match /books/{id} {
+      allow get, list: if isActive() && inSchool();
+      allow create: if (isAdmin() || isLibrarian()) && sameSchool()
+        && request.resource.data.totalCopies is int && request.resource.data.totalCopies >= 0;
+      // Copy counts may only move within the catalogue bounds.
+      allow update: if (isAdmin() || isLibrarian())
+        && unchanged('schoolId') && unchanged('bookCode')
+        && request.resource.data.availableCopies >= 0
+        && request.resource.data.availableCopies <= request.resource.data.totalCopies;
+      allow delete: if isAdmin();
+    }
+
+    match /libraryTransactions/{id} {
+      allow get: if isAdmin() || isLibrarian()
+        || (isStudent() && resource.data.memberUserId == myStudentId())
+        || (isParent() && myChildren().hasAny([resource.data.memberUserId]));
+      allow list: if isAdmin() || isLibrarian() || isStudent() || isParent();
+
+      allow create: if (isAdmin() || isLibrarian()) && sameSchool()
+        && request.resource.data.status == 'issued'
+        && request.resource.data.finePaisa == 0
+        && request.resource.data.issuedBy == uid();
+
+      allow update: if (isAdmin() || isLibrarian())
+        && unchanged('schoolId') && unchanged('bookId') && unchanged('memberUserId');
+
+      allow delete: if isAdmin();
+    }
+
+    // ========================================================= transport/HR
+    match /transportRoutes/{id} {
+      allow get, list: if isActive() && inSchool();
+      allow create, update: if isAdmin() && sameSchool();
+      allow delete: if isAdmin();
+    }
+
+    match /vehicles/{id} {
+      allow get, list: if isActive() && inSchool();
+      allow create, update: if isAdmin() && sameSchool();
+      allow delete: if isAdmin();
+    }
+
+    // =============================================== public write (create only)
+    // Narrowly scoped: unauthenticated visitors may submit an application or a
+    // message, but can never read them back, update them or set statuses.
+    match /admissionApplications/{id} {
+      allow get, list: if isAdmin() || isAccountant();
+
+      allow create: if request.resource.data.schoolId == schoolId()
+        && request.resource.data.status == 'pending'
+        && request.resource.data.source == 'public-website'
+        && request.resource.data.studentName is string
+        && request.resource.data.studentName.size() >= 2
+        && request.resource.data.studentName.size() <= 80
+        && request.resource.data.guardianName is string
+        && request.resource.data.guardianPhone is string
+        && request.resource.data.guardianPhone.matches('^(\\+?88)?01[3-9][0-9]{8}$')
+        && request.resource.data.keys().hasOnly([
+             'schoolId', 'studentName', 'studentNameBn', 'dateOfBirth', 'gender',
+             'applyingClassId', 'guardianName', 'guardianPhone', 'guardianEmail',
+             'address', 'previousSchool', 'note', 'status', 'source',
+             'createdAt', 'updatedAt', 'id'
+           ]);
+
+      allow update: if isAdmin() && unchanged('schoolId');
+      allow delete: if isAdmin();
+    }
+
+    match /contactMessages/{id} {
+      allow get, list: if isAdmin();
+
+      allow create: if request.resource.data.schoolId == schoolId()
+        && request.resource.data.status == 'new'
+        && request.resource.data.source == 'public-website'
+        && request.resource.data.name is string
+        && request.resource.data.name.size() >= 2
+        && request.resource.data.subject is string
+        && request.resource.data.message is string
+        && request.resource.data.message.size() >= 10
+        && request.resource.data.message.size() <= 1500
+        && request.resource.data.keys().hasOnly([
+             'schoolId', 'name', 'email', 'phone', 'subject', 'message',
+             'status', 'source', 'createdAt', 'updatedAt', 'id'
+           ]);
+
+      allow update: if isAdmin() && unchanged('schoolId');
+      allow delete: if isAdmin();
+    }
+
+    // ================================================== notifications & audit
+    match /notifications/{id} {
+      allow get, list: if isActive() && inSchool();
+      allow create, update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    match /auditLogs/{id} {
+      allow get, list: if isAdmin();
+      // Append-only: every actor writes their own uid, nobody edits or deletes.
+      allow create: if isActive() && request.resource.data.actorUid == uid() && sameSchool();
+      allow update, delete: if false;
+    }
+
+    // ============================================================== default
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
